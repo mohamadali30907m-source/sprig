@@ -7,10 +7,16 @@ import { webEngine } from '../../../engine/src/web'
 import * as Babel from "@babel/standalone"
 import TransformDetectInfiniteLoop, { BuildDuplicateFunctionDetector, dissallowBackticksInDoubleQuotes } from '../custom-babel-transforms'
 import {logInfo} from "../../components/popups-etc/help";
+import { extractLegendBitmaps } from './legend-extractor'
 
 interface RunResult {
 	error: NormalizedError | null
 	cleanup: () => void
+}
+
+interface RunGameOptions {
+	onConsole?: (entry: { args: any[], nums: number[], isErr: boolean }) => void
+	onBitmaps?: (bitmaps: [string, string][]) => void
 }
 
 function getErrorObject(): Error {
@@ -57,7 +63,7 @@ export function _performSyntaxCheck(code: string): { error: NormalizedError | nu
 	return { error: transformAndThrowErrors(code, engineAPIKeys, () => {}), cleanup: () => void 0 };
 }
 
-export function runGame(code: string, canvas: HTMLCanvasElement, onPageError: (error: NormalizedError) => void): RunResult | undefined {
+export function runGame(code: string, canvas: HTMLCanvasElement, onPageError: (error: NormalizedError) => void, options: RunGameOptions = {}): RunResult | undefined {
 	const game = webEngine(canvas)
 	const tunes: PlayTuneRes[] = []
 	const timeouts: number[] = []
@@ -98,6 +104,7 @@ export function runGame(code: string, canvas: HTMLCanvasElement, onPageError: (e
 			} else {
 				bitmaps.value = _bitmaps;
 			}
+			options.onBitmaps?.(bitmaps.value)
 			return game.api.setLegend(...bitmaps.value)
 		},
 		playTune: (text: string, n: number) => {
@@ -112,21 +119,25 @@ export function runGame(code: string, canvas: HTMLCanvasElement, onPageError: (e
 				console.log(...args)
 				const err = getErrorObject();
 				const nums = parseErrorStack(err);
-				logInfo.value = [...logInfo.value, {
+				const entry = {
 					args: args,
 					nums: nums as number[],
 					isErr: false
-				}]
+				}
+				options.onConsole?.(entry)
+				logInfo.value = [...logInfo.value, entry]
 			},
 			error: (...args: any[]) => {
 				console.error(...args)
 				const err = getErrorObject();
 				const nums = parseErrorStack(err);
-				logInfo.value = [...logInfo.value, {
+				const entry = {
 					args: args,
 					nums: nums as number[],
 					isErr: true
-				}]
+				}
+				options.onConsole?.(entry)
+				logInfo.value = [...logInfo.value, entry]
 			}
 		}
 	}
@@ -140,32 +151,5 @@ export function runGame(code: string, canvas: HTMLCanvasElement, onPageError: (e
 }
 
 export function runGameHeadless(code: string): void {
-	const game = webEngine(document.createElement('canvas'))
-
-	const api = {
-		...game.api,
-		setTimeout: () => {},
-		setInterval: () => {},
-		setLegend: (..._bitmaps: [string, string][]) => {
-			// this is bad; but for some reason i could not do _bitmaps === [undefined]
-			if(JSON.stringify(_bitmaps) === "[null]") {
-				// @ts-ignore
-				bitmaps.value = [[]];
-				throw new Error('The sprites passed into setLegend each need to be in square brackets, like setLegend([player, bitmap`...`]).');
-			} else
-				bitmaps.value = _bitmaps
-			return game.api.setLegend(..._bitmaps)
-		},
-		playTune: () => {}
-	}
-
-	code = `"use strict";\n${code}`
-	try {
-		const fn = new Function(...Object.keys(api), code)
-		fn(...Object.values(api))
-	} catch (error: any) {
-		normalizeGameError({ kind: 'runtime', error })
-	}
-
-	game.cleanup()
+	bitmaps.value = extractLegendBitmaps(code)
 }
